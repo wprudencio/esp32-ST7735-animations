@@ -23,7 +23,8 @@ Adafruit_NeoPixel pixels(NUMPIXELS, LED_PIN, NEO_GRB + NEO_KHZ800);
 float heights[NUM_BARS];
 float targets[NUM_BARS];
 float phases[NUM_BARS];
-int prevBarH[NUM_BARS];
+int barsY[NUM_BARS], barsH[NUM_BARS];
+uint16_t barColors[NUM_BARS];
 
 void setup() {
   pixels.begin();
@@ -40,16 +41,17 @@ void setup() {
     heights[i] = 0;
     targets[i] = 0;
     phases[i] = random(100) * 0.1;
-    prevBarH[i] = 0;
+    barsH[i] = 0;
+    barsY[i] = HEIGHT;
   }
 }
 
 void loop() {
   unsigned long t = millis();
 
+  // --- Compute all bars first (no drawing) ---
   for (int i = 0; i < NUM_BARS; i++) {
     float freq = 0.5 + i * 0.3;
-
     float amp = 0.3 + sin(t * 0.002 + phases[i]) * 0.3;
     float wave = sin(t * 0.005 * freq + phases[i]) * 0.4
                + sin(t * 0.011 * freq + phases[i] * 2) * 0.3
@@ -60,33 +62,37 @@ void loop() {
     if (targets[i] < 0.05) targets[i] = 0;
     if (targets[i] > 1.0)  targets[i] = 1.0;
 
-    // Attack fast, decay slow
     if (targets[i] > heights[i]) {
       heights[i] += (targets[i] - heights[i]) * 0.6;
     } else {
       heights[i] += (targets[i] - heights[i]) * 0.08;
     }
 
+    int bottom = HEIGHT;
+    barsH[i] = heights[i] * (bottom - 10);
+    barsY[i] = bottom - barsH[i];
+
+    float pos = i / (float)NUM_BARS;
+    uint8_t r = (uint8_t)((1.0 - pos) * 255);
+    uint8_t g = (uint8_t)(pos < 0.5 ? pos * 2 * 200 : (1.0 - (pos - 0.5) * 2) * 200);
+    uint8_t b = (uint8_t)(pos * 255);
+    barColors[i] = tft.color565(r, g, b);
+  }
+
+  // --- Pass 1: draw all black backgrounds (full column width) ---
+  for (int i = 0; i < NUM_BARS; i++) {
     int barX = i * (WIDTH / NUM_BARS);
     int barW = (WIDTH / NUM_BARS) - 1;
-    int bottom = HEIGHT;
-    int barH = heights[i] * (bottom - 10);
+    tft.fillRect(barX, 0, barW, HEIGHT - 10, ST7735_BLACK);
+  }
 
-    // Erase only the old bar area (from top of previous bar to bottom)
-    if (prevBarH[i] > 0) {
-      tft.fillRect(barX, bottom - prevBarH[i], barW, prevBarH[i], ST7735_BLACK);
+  // --- Pass 2: draw all colored bars on top ---
+  for (int i = 0; i < NUM_BARS; i++) {
+    if (barsH[i] > 0) {
+      int barX = i * (WIDTH / NUM_BARS);
+      int barW = (WIDTH / NUM_BARS) - 1;
+      tft.fillRect(barX, barsY[i], barW, barsH[i], barColors[i]);
     }
-
-    // Draw new bar only if visible
-    if (barH > 0) {
-      float pos = i / (float)NUM_BARS;
-      uint8_t r = (uint8_t)((1.0 - pos) * 255);
-      uint8_t g = (uint8_t)(pos < 0.5 ? pos * 2 * 200 : (1.0 - (pos - 0.5) * 2) * 200);
-      uint8_t b = (uint8_t)(pos * 255);
-      tft.fillRect(barX, bottom - barH, barW, barH, tft.color565(r, g, b));
-    }
-
-    prevBarH[i] = barH;
   }
 
   // WS2812 pulses to the beat
