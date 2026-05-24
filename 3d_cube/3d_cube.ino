@@ -21,7 +21,8 @@ Adafruit_NeoPixel pixels(NUMPIXELS, LED_PIN, NEO_GRB + NEO_KHZ800);
 #define HEIGHT 128
 #define CX (WIDTH/2)
 #define CY (HEIGHT/2)
-#define NB 15
+#define MAX_BALLS 500
+int nb = 1;
 #define CUBE_BOUND 0.85
 
 typedef struct { float x,y,z; } Vec3;
@@ -90,15 +91,63 @@ void fbFlush() {
   tft.endWrite();
 }
 
+// ─── 3x5 digit font for counter ────
+const uint8_t digitBits[10][5] = {
+  {0b111, 0b101, 0b101, 0b101, 0b111},  // 0
+  {0b010, 0b110, 0b010, 0b010, 0b111},  // 1
+  {0b111, 0b001, 0b111, 0b100, 0b111},  // 2
+  {0b111, 0b001, 0b111, 0b001, 0b111},  // 3
+  {0b101, 0b101, 0b111, 0b001, 0b001},  // 4
+  {0b111, 0b100, 0b111, 0b001, 0b111},  // 5
+  {0b111, 0b100, 0b111, 0b101, 0b111},  // 6
+  {0b111, 0b001, 0b001, 0b001, 0b001},  // 7
+  {0b111, 0b101, 0b111, 0b101, 0b111},  // 8
+  {0b111, 0b101, 0b111, 0b001, 0b111},  // 9
+};
+
+void fbDrawDigit(int x, int y, uint8_t d, uint16_t c) {
+  if (d > 9) return;
+  for (int row = 0; row < 5; row++) {
+    uint8_t bits = digitBits[d][row];
+    for (int col = 0; col < 3; col++) {
+      if (bits & (0b100 >> col)) FPIX(x+col, y+row, c);
+    }
+  }
+}
+
+void fbDrawNumber(int x, int y, int num, uint16_t c) {
+  if (num > 999) num = 999;
+  int d2 = num / 100;
+  int d1 = (num / 10) % 10;
+  int d0 = num % 10;
+  int cx = x;
+  if (d2 > 0) {
+    fbDrawDigit(cx-8, y, d2, c);
+    fbDrawDigit(cx-2, y, d1, c);
+    fbDrawDigit(cx+4, y, d0, c);
+  } else if (d1 > 0) {
+    fbDrawDigit(cx-4, y, d1, c);
+    fbDrawDigit(cx+2, y, d0, c);
+  } else {
+    fbDrawDigit(cx, y, d0, c);
+  }
+}
+
 // ─── Cube ──────────────────────────
 Vec3 cv[8] = {{-1,-1,-1},{1,-1,-1},{1,1,-1},{-1,1,-1},{-1,-1,1},{1,-1,1},{1,1,1},{-1,1,1}};
 int ee[12][2] = {{0,1},{1,2},{2,3},{3,0},{4,5},{5,6},{6,7},{7,4},{0,4},{1,5},{2,6},{3,7}};
 
 // ─── Balls ─────────────────────────
-Vec3 pos[NB], vel[NB];
-float rad[NB];
-uint16_t cols[NB];
-float hue[NB];
+Vec3 pos[MAX_BALLS], vel[MAX_BALLS];
+float rad[MAX_BALLS];
+uint16_t cols[MAX_BALLS];
+float hue[MAX_BALLS];
+
+// ─── Projected data (global to avoid stack overflow) ──
+Vec3 wp[MAX_BALLS];
+int px[MAX_BALLS], py[MAX_BALLS];
+float pd[MAX_BALLS];
+int order[MAX_BALLS];
 
 // ─── Rotation ──────────────────────
 float ax=0, ay=0, az=0;
@@ -140,6 +189,18 @@ uint16_t hsv(float h, float s, float v) {
   return tft.color565((uint8_t)((r+m)*255),(uint8_t)((g+m)*255),(uint8_t)((b+m)*255));
 }
 
+void addBall(int i) {
+  rad[i] = 0.12 + random(80) * 0.0015;    // 0.12 .. 0.24 — bigger balls
+  pos[i].x = random(2000)*0.0008 - 0.8;
+  pos[i].y = random(2000)*0.0008 - 0.8;
+  pos[i].z = random(2000)*0.0008 - 0.8;
+  vel[i].x = random(400)*0.0001 - 0.02;
+  vel[i].y = random(400)*0.0001 - 0.02;
+  vel[i].z = random(400)*0.0001 - 0.02;
+  hue[i] = i * (360.0 / MAX_BALLS);
+  cols[i] = hsv(hue[i], 0.9, 0.85);
+}
+
 void setup() {
   pinMode(TOUCH_PIN, INPUT);
   pixels.begin(); pixels.setBrightness(0); pixels.clear(); pixels.show();
@@ -148,17 +209,7 @@ void setup() {
   tft.setRotation(1);
   tft.fillScreen(ST7735_BLACK);
 
-  for (int i=0; i<NB; i++) {
-    rad[i] = 0.06 + random(60) * 0.0008;  // 0.06 .. 0.11
-    pos[i].x = random(2000)*0.0008 - 0.8;
-    pos[i].y = random(2000)*0.0008 - 0.8;
-    pos[i].z = random(2000)*0.0008 - 0.8;
-    vel[i].x = random(400)*0.0001 - 0.02;
-    vel[i].y = random(400)*0.0001 - 0.02;
-    vel[i].z = random(400)*0.0001 - 0.02;
-    hue[i] = i * (360.0/NB);
-    cols[i] = hsv(hue[i], 0.9, 0.85);
-  }
+  for (int i=0; i<nb; i++) addBall(i);
 }
 
 void loop() {
@@ -168,11 +219,7 @@ void loop() {
   bool touched = (digitalRead(TOUCH_PIN)==HIGH);
   if (touched && !lt) {
     dir = -dir;
-    for (int i=0; i<NB; i++) {
-      vel[i].x += random(400)*0.0001 - 0.02;
-      vel[i].y += 0.04 + random(200)*0.0001;
-      vel[i].z += random(400)*0.0001 - 0.02;
-    }
+    if (nb < MAX_BALLS) { addBall(nb); nb++; }
   }
   lt = touched;
 
@@ -180,15 +227,15 @@ void loop() {
   const float gravity = 0.005;
   const float damping = 0.997;
 
-  for (int i=0; i<NB; i++) {
+  for (int i=0; i<nb; i++) {
     vel[i].y -= gravity;
     vel[i].x *= damping;
     vel[i].y *= damping;
     vel[i].z *= damping;
   }
 
-  for (int i=0; i<NB; i++) {
-    for (int j=i+1; j<NB; j++) {
+  for (int i=0; i<nb; i++) {
+    for (int j=i+1; j<nb; j++) {
       float dx=pos[i].x-pos[j].x, dy=pos[i].y-pos[j].y, dz=pos[i].z-pos[j].z;
       float d2=dx*dx+dy*dy+dz*dz;
       float minDist=rad[i]+rad[j];
@@ -206,7 +253,7 @@ void loop() {
     }
   }
 
-  for (int i=0; i<NB; i++) {
+  for (int i=0; i<nb; i++) {
     pos[i].x+=vel[i].x; pos[i].y+=vel[i].y; pos[i].z+=vel[i].z;
     float b=CUBE_BOUND-rad[i];
     if (pos[i].x>b)      {pos[i].x=b;      vel[i].x=-fabsf(vel[i].x)*0.55;}
@@ -218,7 +265,7 @@ void loop() {
   }
 
   // Color cycling
-  for (int i=0; i<NB; i++) {
+  for (int i=0; i<nb; i++) {
     hue[i] += 1.0;
     if (hue[i]>=360) hue[i]-=360;
     cols[i] = hsv(hue[i], 0.9, 0.85);
@@ -232,8 +279,7 @@ void loop() {
   // Project
   Vec3 tv[8]; int sx[8],sy[8]; float sd[8];
   for (int i=0; i<8; i++) { tv[i]=cv[i]; aRot(&tv[i]); proj(tv[i],&sx[i],&sy[i],&sd[i]); }
-  Vec3 wp[NB]; int px[NB],py[NB]; float pd[NB];
-  for (int i=0; i<NB; i++) { wp[i]=pos[i]; aRot(&wp[i]); proj(wp[i],&px[i],&py[i],&pd[i]); }
+  for (int i=0; i<nb; i++) { wp[i]=pos[i]; aRot(&wp[i]); proj(wp[i],&px[i],&py[i],&pd[i]); }
 
   // ─── RENDER to framebuffer ────────
   fbClear();
@@ -259,30 +305,27 @@ void loop() {
   }
 
   // Sort balls back-to-front (bubble sort)
-  int order[NB];
-  for (int i=0;i<NB;i++) order[i]=i;
-  for (int i=0;i<NB-1;i++)
-    for (int j=0;j<NB-1-i;j++)
+  for (int i=0;i<nb;i++) order[i]=i;
+  for (int i=0;i<nb-1;i++)
+    for (int j=0;j<nb-1-i;j++)
       if (pd[order[j]]<pd[order[j+1]]) {int t=order[j];order[j]=order[j+1];order[j+1]=t;}
 
-  for (int si=0;si<NB;si++) {
+  for (int si=0;si<nb;si++) {
     int i=order[si];
     if (pd[i]<=0.4||pd[i]>=5.5) continue;
-    int vr=1+(int)(rad[i]*14.0/pd[i]);
-    if (vr<1) vr=1; if (vr>5) vr=5;
-    uint8_t br=(uint8_t)((1.0-(pd[i]-0.5)/5.0)*200+55);
+    int vr=2+(int)(rad[i]*18.0/pd[i]);
+    if (vr<2) vr=2; if (vr>7) vr=7;
 
     fbDrawCircle(px[i],py[i],vr+1,tft.color565(20,20,50));
     fbFillCircle(px[i],py[i],vr,((cols[i]>>1)&0x7BEF));
     fbFillCircle(px[i],py[i],vr-1,cols[i]);
-    if (vr>=3) fbFillCircle(px[i]-1,py[i]-1,vr-2,tft.color565(255,255,255));
+    if (vr>=4) fbFillCircle(px[i]-1,py[i]-1,vr-3,tft.color565(255,255,255));
   }
 
-  // Direction indicator
+  // Direction indicator (top-right corner)
   for (int y=0;y<9;y++)
     for (int x=WIDTH-18;x<WIDTH;x++)
       FPIX(x,y,ST7735_BLACK);
-  // Direction indicator arrow
   uint16_t dc = tft.color565(100,220,255);
   int ax = WIDTH-12, ay = 4;
   if (dir>0) {
@@ -294,6 +337,12 @@ void loop() {
       for (int c=0; c<=r; c++)
         FPIX(ax+3-r, ay-2+c, dc);
   }
+
+  // Ball counter (bottom-right corner)
+  for (int y=HEIGHT-8; y<HEIGHT; y++)
+    for (int x=WIDTH-22; x<WIDTH; x++)
+      FPIX(x,y,ST7735_BLACK);
+  fbDrawNumber(WIDTH-8, HEIGHT-7, nb, tft.color565(100,220,255));
 
   // ─── FLUSH to display in one shot ──
   fbFlush();
