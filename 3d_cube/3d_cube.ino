@@ -10,6 +10,7 @@
 #define TFT_MOSI  2
 #define TFT_SCLK  1
 
+#define TOUCH_PIN 0
 #define LED_PIN   10
 #define NUMPIXELS 1
 
@@ -20,230 +21,255 @@ Adafruit_NeoPixel pixels(NUMPIXELS, LED_PIN, NEO_GRB + NEO_KHZ800);
 #define HEIGHT 128
 #define CX (WIDTH / 2)
 #define CY (HEIGHT / 2)
+#define NUM_PARTICLES 40
 
-// ─── 3D Math ────────────────────────────────────────────
+// ─── 3D types ──────────────────────
 typedef struct { float x, y, z; } Vec3;
 
 Vec3 cubeVerts[8] = {
   {-1, -1, -1}, { 1, -1, -1}, { 1,  1, -1}, {-1,  1, -1},
   {-1, -1,  1}, { 1, -1,  1}, { 1,  1,  1}, {-1,  1,  1}
 };
-
-// 12 edges (pairs of vertex indices)
 int edges[12][2] = {
   {0,1},{1,2},{2,3},{3,0},
   {4,5},{5,6},{6,7},{7,4},
   {0,4},{1,5},{2,6},{3,7}
 };
 
-// Face colors (6 faces, each made of 2 triangles / 4 edges)
-uint16_t faceColors[6] = {
-  0xF800, // Red
-  0x07E0, // Green
-  0x001F, // Blue
-  0xFFE0, // Yellow
-  0x07FF, // Cyan
-  0xF81F  // Magenta
-};
-int faceVerts[6][4] = {
-  {0,1,2,3},  // front
-  {5,4,7,6},  // back
-  {4,0,3,7},  // left
-  {1,5,6,2},  // right
-  {3,2,6,7},  // top
-  {4,5,1,0}   // bottom
-};
+// ─── Particles ─────────────────────
+Vec3 partPos[NUM_PARTICLES];
+Vec3 partVel[NUM_PARTICLES];
+int prevPx[NUM_PARTICLES], prevPy[NUM_PARTICLES];
 
+// ─── Rotation state ────────────────
 float angleX = 0, angleY = 0, angleZ = 0;
+int dir = 1;
+bool lastTouch = false;
+bool firstFrame = true;
 
-// Project 3D point to screen with perspective
-void project(Vec3 p, float* sx, float* sy, float* depth) {
-  float scale = 1.2;
-  float dist = 3.0;
+// ─── Cube line tracking ────────────
+#define MAX_LINES 30
+int lx1[MAX_LINES], ly1[MAX_LINES], lx2[MAX_LINES], ly2[MAX_LINES];
+bool lineActive[MAX_LINES];
+int lineCount = 0;
+
+// ─── 3D math helpers ───────────────
+void rotateVec(Vec3* p, float ax, float ay, float az) {
+  float cosY = cosf(ay), sinY = sinf(ay);
+  float x1 = p->x * cosY - p->z * sinY;
+  float z1 = p->x * sinY + p->z * cosY;
+  p->x = x1; p->z = z1;
+
+  float cosX = cosf(ax), sinX = sinf(ax);
+  float y1 = p->y * cosX - p->z * sinX;
+  float z2 = p->y * sinX + p->z * cosX;
+  p->y = y1; p->z = z2;
+
+  float cosZ = cosf(az), sinZ = sinf(az);
+  float x2 = p->x * cosZ - p->y * sinZ;
+  float y2 = p->x * sinZ + p->y * cosZ;
+  p->x = x2; p->y = y2;
+}
+
+void inverseRotateVec(Vec3* p, float ax, float ay, float az) {
+  float cosZ = cosf(-az), sinZ = sinf(-az);
+  float x2 = p->x * cosZ - p->y * sinZ;
+  float y2 = p->x * sinZ + p->y * cosZ;
+  p->x = x2; p->y = y2;
+  float cosX = cosf(-ax), sinX = sinf(-ax);
+  float y1 = p->y * cosX - p->z * sinX;
+  float z2 = p->y * sinX + p->z * cosX;
+  p->y = y1; p->z = z2;
+  float cosY = cosf(-ay), sinY = sinf(-ay);
+  float x1 = p->x * cosY - p->z * sinY;
+  float z1 = p->x * sinY + p->z * cosY;
+  p->x = x1; p->z = z1;
+}
+
+void project(Vec3 p, int* sx, int* sy, float* depth) {
+  float scale = 1.2, dist = 3.0;
   float z = p.z + dist;
   *depth = z;
   *sx = CX + (p.x / z) * (CX * scale);
   *sy = CY + (p.y / z) * (CX * scale);
 }
 
-// Rotate a point around X, Y, Z axes
-Vec3 rotate(Vec3 p, float ax, float ay, float az) {
-  // Y rotation
-  float cosY = cosf(ay), sinY = sinf(ay);
-  float x1 = p.x * cosY - p.z * sinY;
-  float z1 = p.x * sinY + p.z * cosY;
-  p.x = x1; p.z = z1;
-
-  // X rotation
-  float cosX = cosf(ax), sinX = sinf(ax);
-  float y1 = p.y * cosX - p.z * sinX;
-  float z2 = p.y * sinX + p.z * cosX;
-  p.y = y1; p.z = z2;
-
-  // Z rotation
-  float cosZ = cosf(az), sinZ = sinf(az);
-  float x2 = p.x * cosZ - p.y * sinZ;
-  float y2 = p.x * sinZ + p.y * cosZ;
-  p.x = x2; p.y = y2;
-
-  return p;
-}
-
-// ─── Previous state for incremental rendering ───────────
-#define MAX_LINES 30
-int prevX1[MAX_LINES], prevY1[MAX_LINES];
-int prevX2[MAX_LINES], prevY2[MAX_LINES];
-bool lineActive[MAX_LINES];
-int lineCount = 0;
-bool firstFrame = true;
-
-uint16_t lerpColor(uint16_t c1, uint16_t c2, float t) {
-  uint8_t r1 = (c1 >> 8) & 0xF8;
-  uint8_t g1 = (c1 >> 3) & 0xFC;
-  uint8_t b1 = (c1 << 3) & 0xF8;
-  uint8_t r2 = (c2 >> 8) & 0xF8;
-  uint8_t g2 = (c2 >> 3) & 0xFC;
-  uint8_t b2 = (c2 << 3) & 0xF8;
-  uint8_t r = r1 + (r2 - r1) * t;
-  uint8_t g = g1 + (g2 - g1) * t;
-  uint8_t b = b1 + (b2 - b1) * t;
-  return tft.color565(r, g, b);
-}
-
 void setup() {
-  pixels.begin();
-  pixels.setBrightness(30);
-  pixels.clear();
-  pixels.show();
-
+  pinMode(TOUCH_PIN, INPUT);
+  pixels.begin(); pixels.setBrightness(30); pixels.clear(); pixels.show();
   SPI.begin(TFT_SCLK, -1, TFT_MOSI, TFT_CS);
-  tft.initR(INITR_BLACKTAB);
-  tft.setRotation(1);
-  tft.fillScreen(ST7735_BLACK);
+  tft.initR(INITR_BLACKTAB); tft.setRotation(1); tft.fillScreen(ST7735_BLACK);
 
-  for (int i = 0; i < MAX_LINES; i++) {
-    lineActive[i] = false;
-    prevX1[i] = prevY1[i] = prevX2[i] = prevY2[i] = 0;
+  // Init particles inside the cube with random positions & velocities
+  for (int i = 0; i < NUM_PARTICLES; i++) {
+    partPos[i].x = ((float)random(1000) / 500.0 - 1.0) * 0.85;
+    partPos[i].y = ((float)random(1000) / 500.0 - 1.0) * 0.85;
+    partPos[i].z = ((float)random(1000) / 500.0 - 1.0) * 0.85;
+    partVel[i].x = ((float)random(1000) / 500.0 - 1.0) * 0.005;
+    partVel[i].y = ((float)random(1000) / 500.0 - 1.0) * 0.005;
+    partVel[i].z = ((float)random(1000) / 500.0 - 1.0) * 0.005;
+    prevPx[i] = prevPy[i] = -1;
   }
+  for (int i = 0; i < MAX_LINES; i++) lineActive[i] = false;
 }
 
 void loop() {
   unsigned long t = millis();
 
-  // ─── Rotate ───
-  angleX += 0.025;
-  angleY += 0.04;
-  angleZ += 0.015;
+  // ─── Touch: reverse rotation ───
+  bool touched = (digitalRead(TOUCH_PIN) == HIGH);
+  if (touched && !lastTouch) { dir = -dir; delay(200); }
+  lastTouch = touched;
 
-  // ─── Transform vertices ───
-  Vec3 transformed[8];
-  float sx[8], sy[8], depth[8];
+  float da = 0.025 * dir;
+  angleX += da; angleY += da * 1.6; angleZ += da * 0.6;
+
+  // ─── Update particles (world-space physics) ───
+  for (int i = 0; i < NUM_PARTICLES; i++) {
+    // Gravity (world-space -Y)
+    partVel[i].y -= 0.0015;
+
+    // Damping
+    partVel[i].x *= 0.995;
+    partVel[i].y *= 0.995;
+    partVel[i].z *= 0.995;
+
+    // Random jitter (liquid thermal motion)
+    partVel[i].x += ((float)random(1000) / 5000.0 - 0.1) * 0.0008;
+    partVel[i].y += ((float)random(1000) / 5000.0 - 0.1) * 0.0008;
+    partVel[i].z += ((float)random(1000) / 5000.0 - 0.1) * 0.0008;
+
+    // Move
+    partPos[i].x += partVel[i].x;
+    partPos[i].y += partVel[i].y;
+    partPos[i].z += partVel[i].z;
+
+    // Check cube bounds: transform to cube-local space, clamp, reflect, go back to world
+    Vec3 local = partPos[i];
+    inverseRotateVec(&local, angleX, angleY, angleZ);
+
+    bool hit = false;
+    if (local.x > 0.9) { local.x = 0.9 - (local.x - 0.9); partVel[i].x = -partVel[i].x * 0.7; hit = true; }
+    if (local.x < -0.9) { local.x = -0.9 + (-0.9 - local.x); partVel[i].x = -partVel[i].x * 0.7; hit = true; }
+    if (local.y > 0.9) { local.y = 0.9 - (local.y - 0.9); partVel[i].y = -partVel[i].y * 0.7; hit = true; }
+    if (local.y < -0.9) { local.y = -0.9 + (-0.9 - local.y); partVel[i].y = -partVel[i].y * 0.7; hit = true; }
+    if (local.z > 0.9) { local.z = 0.9 - (local.z - 0.9); partVel[i].z = -partVel[i].z * 0.7; hit = true; }
+    if (local.z < -0.9) { local.z = -0.9 + (-0.9 - local.z); partVel[i].z = -partVel[i].z * 0.7; hit = true; }
+
+    if (hit) {
+      // Convert back to world space
+      rotateVec(&local, angleX, angleY, angleZ);
+      partPos[i] = local;
+    }
+  }
+
+  // ─── Transform cube vertices ───
+  Vec3 tv[8]; int sx[8], sy[8]; float sd[8];
   for (int i = 0; i < 8; i++) {
-    transformed[i] = rotate(cubeVerts[i], angleX, angleY, angleZ);
-    project(transformed[i], &sx[i], &sy[i], &depth[i]);
+    tv[i] = cubeVerts[i]; rotateVec(&tv[i], angleX, angleY, angleZ);
+    project(tv[i], &sx[i], &sy[i], &sd[i]);
   }
 
-  // ─── Color shift over time ───
-  uint8_t hueShift = (uint8_t)(t * 0.03);
-  uint16_t shiftedColors[6];
-  for (int i = 0; i < 6; i++) {
-    uint8_t r = (faceColors[i] >> 8) & 0xF8;
-    uint8_t g = (faceColors[i] >> 3) & 0xFC;
-    uint8_t b = (faceColors[i] << 3) & 0xF8;
-    // slight hue shift
-    shiftedColors[i] = tft.color565(r, g, b);
-  }
-
-  // ─── Sort edges by depth for painter's algorithm ───
-  // (simplified: just draw edges, depth-sort face centers for color)
-  struct Edge { int v0, v1; float z; uint16_t color; };
+  // ─── Sort edges by depth ───
+  struct Edge { int v0, v1; float z; };
   struct Edge sorted[12];
-
   for (int i = 0; i < 12; i++) {
     int a = edges[i][0], b = edges[i][1];
-    sorted[i].v0 = a;
-    sorted[i].v1 = b;
-    sorted[i].z = (depth[a] + depth[b]) / 2;
-    // Assign face color based on which face this edge belongs to
-    int faceIdx = i / 2;  // 2 edges per face
-    if (faceIdx > 5) faceIdx = 5;
-    sorted[i].color = faceColors[faceIdx];
+    sorted[i].v0 = a; sorted[i].v1 = b;
+    sorted[i].z = (sd[a] + sd[b]) / 2;
   }
-
-  // Simple bubble sort by depth (farthest first)
-  for (int i = 0; i < 12 - 1; i++) {
-    for (int j = 0; j < 12 - i - 1; j++) {
+  for (int i = 0; i < 11; i++) {
+    for (int j = 0; j < 11 - i; j++) {
       if (sorted[j].z > sorted[j+1].z) {
-        struct Edge tmp = sorted[j];
-        sorted[j] = sorted[j+1];
-        sorted[j+1] = tmp;
+        struct Edge tmp = sorted[j]; sorted[j] = sorted[j+1]; sorted[j+1] = tmp;
       }
     }
   }
 
-  // ─── First frame ───
+  // ─── Project particles ───
+  int px[NUM_PARTICLES], py[NUM_PARTICLES];
+  float pd[NUM_PARTICLES];
+  for (int i = 0; i < NUM_PARTICLES; i++) {
+    project(partPos[i], &px[i], &py[i], &pd[i]);
+  }
+
+  // ─── DRAW ──────────────────────────
   if (firstFrame) {
     tft.fillScreen(ST7735_BLACK);
     for (int i = 0; i < 12; i++) {
       int a = sorted[i].v0, b = sorted[i].v1;
-      int x1 = sx[a], y1 = sy[a];
-      int x2 = sx[b], y2 = sy[b];
-      tft.drawLine(x1, y1, x2, y2, sorted[i].color);
+      tft.drawLine(sx[a], sy[a], sx[b], sy[b], tft.color565(100, 200, 255));
       if (i < MAX_LINES) {
-        prevX1[i] = x1; prevY1[i] = y1;
-        prevX2[i] = x2; prevY2[i] = y2;
+        lx1[i] = sx[a]; ly1[i] = sy[a]; lx2[i] = sx[b]; ly2[i] = sy[b];
         lineActive[i] = true;
       }
     }
     lineCount = 12;
+    for (int i = 0; i < NUM_PARTICLES; i++) {
+      if (pd[i] > 0.5 && pd[i] < 6.0) {
+        uint8_t b = (1.0 - (pd[i] - 0.5) / 5.5) * 255;
+        tft.fillCircle(px[i], py[i], 1 + (uint8_t)((1.0 / pd[i]) * 4), tft.color565(0, b / 2, b));
+        prevPx[i] = px[i]; prevPy[i] = py[i];
+      }
+    }
     firstFrame = false;
-    goto finish;
-  }
-
-  // ─── Incremental: erase old lines, draw new ───
-  // We erase ALL old lines first (one pass), then draw ALL new lines
-  for (int i = 0; i < lineCount && i < MAX_LINES; i++) {
-    if (lineActive[i]) {
-      tft.drawLine(prevX1[i], prevY1[i], prevX2[i], prevY2[i], ST7735_BLACK);
+  } else {
+    // Erase old particles
+    for (int i = 0; i < NUM_PARTICLES; i++) {
+      if (prevPx[i] >= 0) {
+        tft.fillCircle(prevPx[i], prevPy[i], 3, ST7735_BLACK);
+      }
+    }
+    // Erase old cube lines
+    for (int i = 0; i < lineCount && i < MAX_LINES; i++) {
+      if (lineActive[i]) tft.drawLine(lx1[i], ly1[i], lx2[i], ly2[i], ST7735_BLACK);
+    }
+    // Draw cube lines (with cyan glow)
+    for (int i = 0; i < 12 && i < MAX_LINES; i++) {
+      int a = sorted[i].v0, b = sorted[i].v1;
+      float edgeDepth = (sd[a] + sd[b]) / 2;
+      uint8_t cb = (uint8_t)((1.0 - (edgeDepth - 0.5) / 5.5) * 200 + 55);
+      tft.drawLine(sx[a], sy[a], sx[b], sy[b], tft.color565(cb / 3, cb, cb));
+      lx1[i] = sx[a]; ly1[i] = sy[a]; lx2[i] = sx[b]; ly2[i] = sy[b];
+      lineActive[i] = true;
+    }
+    lineCount = 12;
+    // Draw particles
+    for (int i = 0; i < NUM_PARTICLES; i++) {
+      if (pd[i] > 0.4 && pd[i] < 6.0) {
+        int r = 1 + (uint8_t)((1.0 / pd[i]) * 3);
+        float norm = (pd[i] - 0.5) / 5.5;
+        uint8_t bright = (uint8_t)((1.0 - norm) * 255);
+        if (bright > 255) bright = 255;
+        tft.fillCircle(px[i], py[i], r, tft.color565(bright / 3, bright / 2, bright));
+        prevPx[i] = px[i]; prevPy[i] = py[i];
+      } else {
+        prevPx[i] = -1;
+      }
     }
   }
 
-  for (int i = 0; i < 12 && i < MAX_LINES; i++) {
-    int a = sorted[i].v0, b = sorted[i].v1;
-    int x1 = sx[a], y1 = sy[a];
-    int x2 = sx[b], y2 = sy[b];
-    tft.drawLine(x1, y1, x2, y2, sorted[i].color);
-    prevX1[i] = x1; prevY1[i] = y1;
-    prevX2[i] = x2; prevY2[i] = y2;
-    lineActive[i] = true;
-  }
-  lineCount = 12;
+  // ─── Direction indicator ───
+  tft.fillRect(WIDTH - 20, 0, 20, 10, ST7735_BLACK);
+  tft.setTextSize(1);
+  tft.setCursor(WIDTH - 16, 1);
+  tft.setTextColor(tft.color565(60, 100, 60), ST7735_BLACK);
+  tft.print(dir > 0 ? ">>" : "<<");
 
-  // ─── Draw a small glow dot at each vertex ───
-  // (only for vertices that aren't too far back)
-  for (int i = 0; i < 8; i++) {
-    if (depth[i] > 1.0 && depth[i] < 5.0) {
-      uint8_t brightness = 255 - (depth[i] - 1.0) / 4.0 * 200;
-      tft.drawPixel(sx[i], sy[i], tft.color565(brightness, brightness, brightness));
-    }
-  }
-
-finish:
-  // ─── WS2812: rainbow cycle ───
-  uint8_t ledHue = (uint8_t)(t * 0.04);
+  // ─── WS2812 ───
+  uint8_t h = (uint8_t)(t * 0.04);
   uint8_t lr, lg, lb;
-  uint8_t ledRegion = ledHue / 43;
-  uint8_t ledRem = (ledHue - ledRegion * 43) * 6;
-  switch (ledRegion) {
-    case 0: lr = 255; lg = ledRem; lb = 0; break;
-    case 1: lr = 255 - ledRem; lg = 255; lb = 0; break;
-    case 2: lr = 0; lg = 255; lb = ledRem; break;
-    case 3: lr = 0; lg = 255 - ledRem; lb = 255; break;
-    case 4: lr = ledRem; lg = 0; lb = 255; break;
-    default: lr = 255; lg = 0; lb = 255 - ledRem; break;
+  uint8_t reg = h / 43, rem = (h - reg * 43) * 6;
+  switch (reg) {
+    case 0: lr = 255; lg = rem; lb = 0; break;
+    case 1: lr = 255 - rem; lg = 255; lb = 0; break;
+    case 2: lr = 0; lg = 255; lb = rem; break;
+    case 3: lr = 0; lg = 255 - rem; lb = 255; break;
+    case 4: lr = rem; lg = 0; lb = 255; break;
+    default: lr = 255; lg = 0; lb = 255 - rem; break;
   }
   pixels.setPixelColor(0, pixels.Color(lr, lg, lb));
   pixels.show();
 
-  delay(16);
+  delay(20);
 }
