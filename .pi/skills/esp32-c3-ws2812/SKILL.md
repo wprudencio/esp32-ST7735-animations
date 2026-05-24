@@ -10,22 +10,22 @@ description: Flash and develop for the ESP32-C3 board with a WS2812 (NeoPixel) L
 | Property | Value |
 |---|---|
 | **Chip** | ESP32-C3 (RISC-V, single core @ 160MHz) |
-| **Port** | `/dev/cu.usbmodem14101` |
+| **Port** | `/dev/cu.usbmodemxxxxx` (check with `arduino-cli board list`) |
 | **Flash** | 4MB embedded |
 | **LED** | WS2812 (NeoPixel) on **GPIO 10** |
-| **Arduino CLI** | `/Users/weslei/personalprojects/esp32/bin/arduino-cli` |
+| **Tools** | Arduino CLI (`arduino-cli` must be in PATH or at project root) |
 
 ## Quick Start — Blue Blink
 
 ```bash
-cd /Users/weslei/personalprojects/esp32
-export PATH="$PWD/bin:$PATH"
+cd <project-root>
+export PATH="$PWD/bin:$PATH"  # if arduino-cli is in bin/
 
 # Compile
 arduino-cli compile --fqbn esp32:esp32:esp32c3 ws2812_blue_blink
 
-# Flash
-arduino-cli upload -p /dev/cu.usbmodem14101 --fqbn esp32:esp32:esp32c3 ws2812_blue_blink
+# Flash (replace port with your device)
+arduino-cli upload -p /dev/cu.usbmodemXXXXX --fqbn esp32:esp32:esp32c3 ws2812_blue_blink
 ```
 
 ## Creating a New Sketch
@@ -46,7 +46,7 @@ void setup() {
 }
 
 void loop() {
-  pixels.setPixelColor(0, pixels.Color(255, 0, 0));  // Red
+  pixels.setPixelColor(0, pixels.Color(255, 0, 0));
   pixels.show();
   delay(500);
   pixels.clear();
@@ -56,13 +56,13 @@ void loop() {
 EOF
 
 arduino-cli compile --fqbn esp32:esp32:esp32c3 my_sketch
-arduino-cli upload -p /dev/cu.usbmodem14101 --fqbn esp32:esp32:esp32c3 my_sketch
+arduino-cli upload -p /dev/cu.usbmodemXXXXX --fqbn esp32:esp32:esp32c3 my_sketch
 ```
 
 ## Monitoring Serial Output
 
 ```bash
-arduino-cli monitor -p /dev/cu.usbmodem14101 -c baudrate=115200
+arduino-cli monitor -p /dev/cu.usbmodemXXXXX -c baudrate=115200
 ```
 
 ## Board Info
@@ -81,7 +81,8 @@ arduino-cli board list
 | `tft_animation/` | 6 animation modes (rainbow bars, bounce, starfield, plasma, spinner, fill flash) with FPS counter. Tap touch to cycle modes |
 | `spectrum/` | Music spectrum visualizer — 16 bars, simulated audio, fast-attack/slow-decay, WS2812 pulse to beat |
 | `spectrum_psy/` | Psychedelic mirrored spectrum — 24 bars (12L+12R) radiating from center, rainbow cycling, center flare, rainbow WS2812 |
-| `3d_cube/` | 3D wireframe cube with 3 bouncing liquid balls — rainbow edges, local-space physics, pre-computed rotation matrix, touch to reverse spin |
+| `3d_cube/` | 3D wireframe cube with liquid particles — rainbow edges, local-space physics, pre-computed rotation matrix, touch to reverse spin |
+| `dvd_bounce/` | DVD screensaver — bitmap-traced logo from SVG, bounces diagonally, 9 colors, touch changes direction |
 | `space_game/` | 3D space dodge game — parallax starfield, asteroid shooting, lives/score, touch to thrust, game over + restart |
 | `3d_spectrum/` | 3D box-art spectrum visualizer — extruded bars with front/top/side faces, 5 color palettes, touch to cycle palettes |
 
@@ -94,23 +95,22 @@ arduino-cli board list
 The ST7735 communicates over SPI. On the ESP32-C3 you **must** call `SPI.begin()` with the correct pins before `tft.initR()`:
 
 ```cpp
-// Pins used in this project
+// Example pinout — adjust to your wiring
 #define TFT_CS    5
 #define TFT_RST   4
 #define TFT_DC    3
 #define TFT_MOSI  2
 #define TFT_SCLK  1
 
-// Hardware SPI constructor (uses the default SPI peripheral)
+// Hardware SPI constructor
 Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_RST);
 
 void setup() {
-  // ⚠️ THIS LINE IS MANDATORY — tells the ESP32-C3 which pins are MOSI/SCLK
+  // ⚠️ THIS IS MANDATORY — tells the ESP32-C3 which pins are MOSI/SCLK
   SPI.begin(TFT_SCLK, -1, TFT_MOSI, TFT_CS);
-  //              SCLK  MISO   MOSI      CS (optional)
 
   tft.initR(INITR_BLACKTAB);
-  tft.setRotation(1);     // 0/2 = portrait 128x160, 1/3 = landscape 160x128
+  tft.setRotation(1);     // 0/2 = portrait, 1/3 = landscape
   tft.fillScreen(ST7735_BLACK);
 }
 ```
@@ -125,253 +125,121 @@ Every `fillRect()`, `drawPixel()`, etc. goes through this chain:
 CPU → SPI.transfer(data) → MOSI pin → Display controller → Frame buffer → LCD
 ```
 
-Each `fillRect()` command sends:
-- A **command** to set the drawing window (x, y, w, h)  
+Each `fillRect()` sends:
+- A **command** to set the drawing window (x, y, w, h)
 - A **data burst** of RGB565 pixels (2 bytes per pixel)
 
-**That's why minimizing SPI writes is critical.** The display's internal frame buffer refresh + the slow SPI clock (~20-40MHz, shared overhead per transaction) means every unnecessary pixel write steals time from the next frame.
+**Minimizing SPI writes is critical** for smooth animation.
 
 ## 3. Animation Strategy — The Incremental Method
 
-### The Problem
-
+### ❌ Don't full-clear every frame
 ```cpp
-// ❌ Visible tearing: full screen goes black before every frame
-tft.fillScreen(BLACK);
-for (int i = 0; i < 16; i++) {
-  tft.fillRect(x, top, w, h, color);  // bars appear one by one
-}
+tft.fillScreen(ST7735_BLACK);   // visible flash
+for (...) { tft.fillRect(...); } // sequential draw
 ```
 
-This sends data for **all 20,480 pixels** every frame, plus you see the black flash.
-
+### ❌ Don't two-pass (black then color)
 ```cpp
-// ❌ Two-pass: first all black, then all color
-for (int i = 0; i < 16; i++) {
-  tft.fillRect(x, 0, w, HEIGHT, BLACK);  // columns flash black
-}
-for (int i = 0; i < 16; i++) {
-  tft.fillRect(x, top, w, h, color);     // then color
-}
+for (...) { tft.fillRect(bx, 0, bw, HEIGHT, BLACK); }  // all black flash
+for (...) { tft.fillRect(bx, top, bw, h, COLOR); }     // then color
 ```
 
-You see black columns appear before color.
-
-### The Solution — Track and Diff
-
-Each animated element has **properties that change** (position, size) and **properties that stay constant** (color, shape). Only write the difference.
-
-**Spectrum visualizer example:**
-- Each bar's **color is fixed** (depends only on its position left→right)
-- Only the **bar height changes** each frame
-- The bottom portion of the bar is identical → don't redraw it
-
+### ✅ Only redraw the pixels that changed
 ```cpp
-// Pattern:
-// 1. Track previous state
-int prevTop[NUM_BARS];
-int prevH[NUM_BARS];
-
-// 2. Each frame, compute new state
-int newH = heights[i] * (HEIGHT - 10);
-int newTop = HEIGHT - newH;
-
-// 3. Only write the difference
-if (newTop < prevTop[i]) {
-  // Bar grew → colored sliver at the new top
-  tft.fillRect(bx, newTop, bw, prevTop[i] - newTop, barColor);
-} else if (newTop > prevTop[i]) {
+if (newTop < prevTop) {
+  // Bar grew → colored sliver at new top
+  tft.fillRect(bx, newTop, bw, prevTop - newTop, barColor);
+} else if (newTop > prevTop) {
   // Bar shrank → black sliver over exposed area
-  tft.fillRect(bx, prevTop[i], bw, newTop - prevTop[i], ST7735_BLACK);
+  tft.fillRect(bx, prevTop, bw, newTop - prevTop, BLACK);
 }
-// Same height → nothing to do, zero SPI writes
-
-prevTop[i] = newTop;
+// Same height = zero SPI writes
 ```
 
-**Result:** Instead of 20,480 pixels per frame, you write ~50-200 pixels. The display barely has to work.
-
-### The "First Frame" Problem
-
-The first frame has no previous state — all bars go from 0 height to their initial height. Handle it:
-
+### The "First Frame" Pattern
 ```cpp
 bool firstFrame = true;
 
 void loop() {
   if (firstFrame) {
-    // Full redraw on frame 1
-    tft.fillRect(bx, 0, bw, HEIGHT - 10, BLACK);
-    tft.fillRect(bx, newTop, bw, newH, color);
+    tft.fillScreen(ST7735_BLACK);   // full draw on frame 1
+    // ... draw everything ...
     firstFrame = false;
   } else {
-    // Incremental update from frame 2 onwards
-    // ... diff logic ...
+    // Incremental updates from frame 2+
   }
 }
 ```
 
-## 4. Template for New Animation Projects
+## 4. Performance Optimization
 
+### Pre-compute rotation matrices
 ```cpp
-#include <Adafruit_GFX.h>
-#include <Adafruit_ST7735.h>
-#include <SPI.h>
-
-#define TFT_CS    5
-#define TFT_RST   4
-#define TFT_DC    3
-#define TFT_MOSI  2
-#define TFT_SCLK  1
-
-Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_RST);
-
-#define WIDTH  160
-#define HEIGHT 128
-
-// --- Track previous state here ---
-// int prevX, prevY, prevH, etc.
-
-// --- Your elements here ---
-// struct Element { int x, y, h; uint16_t color; } elements[N];
-
-bool firstFrame = true;
-
-void setup() {
-  SPI.begin(TFT_SCLK, -1, TFT_MOSI, TFT_CS);
-  tft.initR(INITR_BLACKTAB);
-  tft.setRotation(1);
-  tft.fillScreen(ST7735_BLACK);
+// ❌ Per-particle trig (slow):
+void rotateParticle(Vec3 *p, float ax, float ay, float az) {
+  float cx=cosf(ax), sx=sinf(ax); // called for every particle
+  ...
 }
 
-void loop() {
-  // 1️⃣ Compute new state (no drawing)
-  //    - Update positions, sizes based on time/math/input
-
-  // 2️⃣ First frame: full draw
-  if (firstFrame) {
-    tft.fillScreen(ST7735_BLACK);
-    // ... draw everything from scratch ...
-    firstFrame = false;
-    return;
-  }
-
-  // 3️⃣ Subsequent frames: only differences
-  //    - If element moved: erase old position, draw new position
-  //    - If element changed size: update the changing edge only
-  //    - If element is static: skip it
-
-  delay(16);  // ~60fps
+// ✅ Pre-compute matrix once per frame:
+float rot[9];  // 3x3 matrix
+void compRot(float ax, float ay, float az) {
+  // 6 trig calls total, then reuse for all particles
+  rot[0] = cy*cz + sx*sy*sz; ... 
 }
+void applyRot(Vec3 *p) {
+  // 9 multiplies + 6 adds — no trig!
+  p->x = p->x*rot[0] + p->y*rot[1] + p->z*rot[2]; ...
+}
+```
+
+### drawPixel vs fillCircle
+- `drawPixel` = 1 SPI command + 2 bytes = ~5μs
+- `fillCircle(r=3)` = ~28 pixels = ~140μs
+- For many particles: use `drawPixel`. For few elements (<5): `fillCircle` is fine.
+
+### Local-space physics for 3D containers
+```cpp
+// ✅ Physics in LOCAL space = easy bounds checking
+float bound = 0.85;
+pos[i].y -= 0.002f;        // gravity
+if (pos[i].y < -bound) {   // trivial collision
+  pos[i].y = -bound;
+  vel[i].y *= -0.1f;       // liquid: no bounce
+}
+
+// Then rotate to world space ONCE for rendering:
+Vec3 world = pos[i];
+applyRot(&world);
+project(world, &sx, &sy, &depth);
 ```
 
 ## 5. Common Pitfalls
 
 | Problem | Cause | Fix |
 |---|---|---|
-| **White screen** | `SPI.begin()` not called, or wrong pins | Add `SPI.begin(SCLK, -1, MOSI, CS)` before `tft.initR()` |
-| **Tearing / flash** | Full-screen clear every frame | Use incremental updates instead |
-| **Bars flicker** | Erase-then-draw per element (sequential visible updates) | Batch operations: compute all, then draw, or use diff-only |
-| **Slow FPS** | `delay()` too long, or too many SPI writes | Shorten delay to 16-30ms, minimize pixel writes |
-| **Display won't initialize** | Wrong `initR` parameter | Try `INITR_BLACKTAB`, `INITR_GREENTAB`, or `INITR_144GREENTAB` for different ST7735 variants |
-| **Ghosting / artifacts** | Drawing outside visible area or wrong rotation | Verify `setRotation()` matches your physical orientation |
+| **White screen** | `SPI.begin()` not called | Add `SPI.begin(SCLK, -1, MOSI, CS)` before `tft.initR()` |
+| **Tearing / flash** | Full-screen clear every frame | Use incremental updates |
+| **Bars flicker** | Erase-then-draw per element | Batch operations or diff-only |
+| **Slow FPS** | `delay()` too long, too many SPI writes | Shorten delay to 16-30ms, minimize pixels |
+| **Display won't init** | Wrong `initR` parameter | Try `INITR_BLACKTAB`, `INITR_GREENTAB`, `INITR_144GREENTAB` |
+| **Ghosting** | Drawing outside visible area | Verify `setRotation()` matches orientation |
+| **Port not found** | Device disconnected or reconnected | Run `arduino-cli board list` to find new port |
+| **Flash fails** | Boot mode issue | Hold BOOT button (GPIO 9) during connecting phase |
 
-## 6. How the Spectrum Visualizer Works (Full Walkthrough)
-
-1. **16 bars**, each 9px wide with 1px gap
-2. Each bar has a **fixed color** based on its position: warm (red/orange) on left → cool (blue/cyan) on right
-3. Each bar simulates an audio frequency band using **three sine waves + noise** per band, each with different frequencies to prevent any two bars from moving identically
-4. **Fast attack / slow decay**: if the new target is higher, jump toward it quickly (0.6 factor); if lower, drift down slowly (0.08 factor) — mimics real hardware spectrum analyzers
-5. **Only the bar top** (the changing edge) is redrawn each frame
-6. The **WS2812 LED** pulses to a simulated beat (a single sine wave at ~8Hz)
-
-This all runs at **~30fps** with barely any visible artifacts.
-
-## 7. Performance Optimization Checklist
+## 6. Performance Checklist
 
 - [ ] `SPI.begin()` called with correct pins
-- [ ] No `fillScreen()` or `fillRect(0, 0, W, H)` in the hot loop
+- [ ] No `fillScreen()` or full `fillRect(0, 0, W, H)` in hot loop
 - [ ] Each element tracks its previous state
-- [ ] Only changed pixels are written
+- [ ] Only changed pixels are written each frame
 - [ ] `delay()` is ≤ 30ms (or use millis() delta)
-- [ ] Colors are pre-computed (not recalculated per frame if constant)
-- [ ] First frame handled separately as a full draw
-
-## 8. 3D Performance Optimization (from the cube particle demo)
-
-The 3D cube with 25 bouncing particles was initially **too slow**. Here's what made it fast:
-
-### ❌ Slow: Per-particle trig functions
-```cpp
-// BAD — cosf/sinf called 3x per particle x 25 particles = 75 trig calls/frame
-for (int i = 0; i < NP; i++) {
-  float cosY = cosf(ay), sinY = sinf(ay);  // recomputed every iteration!
-  // ... rotate particle ...
-}
-```
-
-### ✅ Fast: Pre-compute rotation matrix once per frame
-```cpp
-// Calculate the 3x3 rotation matrix ONCE, reuse for all particles
-float rot[9];
-void compRot(float ax, float ay, float az) {
-  float cx=cosf(ax), sx=sinf(ax), cy=cosf(ay), sy=sinf(ay), cz=cosf(az), sz=sinf(az);
-  rot[0]=cy*cz+sx*sy*sz; rot[1]=-cx*sz; rot[2]=sy*cz-sx*cy*sz;
-  rot[3]=cy*sz-sx*sy*cz; rot[4]=cx*cz;  rot[5]=sy*sz+sx*cy*cz;
-  rot[6]=-cx*sy;         rot[7]=sx;     rot[8]=cx*cy;
-}
-// Then per particle: just 9 multiplies + 6 adds, no trig!
-void applyRot(Vec3* p) {
-  float x=p->x*rot[0]+p->y*rot[1]+p->z*rot[2];
-  float y=p->x*rot[3]+p->y*rot[4]+p->z*rot[5];
-  float z=p->x*rot[6]+p->y*rot[7]+p->z*rot[8];
-}
-```
-**Result:** 75 trig calls → 6 trig calls. ~10x faster rotation.
-
-### ❌ Slow: `fillCircle` for every particle
-```cpp
-// BAD — fillCircle sends a command + data for every pixel in the circle
-tft.fillCircle(px, py, 3, color);  // ~28 pixels of SPI data
-```
-
-### ✅ Fast: `drawPixel` (or limit `fillCircle` to a small N)
-```cpp
-// GOOD — single pixel = 1 SPI command + 2 bytes data
-tft.drawPixel(px, py, color);
-
-// For bigger dots: use fillCircle only when N is small (<5 balls)
-// With 25+ particles, drawPixel + 1 dim neighbor gives a glow effect
-// with 1/10th the SPI data of fillCircle(radius=3)
-```
-
-### ✅ Fast: Do physics in LOCAL space
-```cpp
-// Keep particles in the cube's coordinate system.
-// Bounds checking is just `if (pos.x > 1.0)` — no rotation needed.
-// Only rotate once for rendering, not once for bounds check.
-
-float bound = 1.0 - BALL_RADIUS;
-if (pos[i].x > bound) { pos[i].x = bound; vel[i].x *= -0.65; }
-// ... same for y, z ...
-
-// Then rotate once for rendering:
-Vec3 worldPos = pos[i];
-applyRot(&worldPos);
-project(worldPos, &sx, &sy, &depth);
-```
-
-### Summary: 3D Math on ESP32-C3
-
-| Technique | Impact |
-|---|---|
-| Pre-compute rotation matrix | ~10x fewer trig calls |
-| `drawPixel` over `fillCircle` | ~10x less SPI data per particle |
-| Local-space physics | Eliminates inverse rotation per particle |
-| Reduce particle count | Linear speedup (fewer pixels erased/drawn) |
-| Skip particles outside view | Don't draw if depth < 0.5 or depth > 6 |
-
-The optimized 3D cube went from **~10 fps to ~50 fps** with these changes.
+- [ ] Colors pre-computed (not recalculated per frame if constant)
+- [ ] First frame handled separately as full draw
+- [ ] Pre-compute rotation matrices for 3D (6 trig calls vs 75)
+- [ ] Use `drawPixel` over `fillCircle` for many particles
+- [ ] Physics in local space for container-based simulations
 
 ---
 
@@ -379,6 +247,7 @@ The optimized 3D cube went from **~10 fps to ~50 fps** with these changes.
 
 - The ESP32-C3's built-in USB-Serial/JTAG handles both flashing and serial — no external UART needed
 - GPIO 10 is safe to use for WS2812 (no strapping conflicts on C3)
-- Set LED brightness conservatively (`setBrightness(50)`) — full brightness can draw too much current from the 3.3V pin
-- If flashing fails, hold the **BOOT** button (GPIO 9) while connecting, or press it during the `Connecting...` phase
-- Always run `arduino-cli board list` to confirm the port — it changes when you reconnect
+- Set LED brightness conservatively (`setBrightness(50)`) — full brightness can draw too much current from 3.3V
+- If flashing fails, hold **BOOT** button (GPIO 9) while connecting
+- Always run `arduino-cli board list` to confirm the port — it changes on reconnect
+- All paths in commands are relative to the project root — no absolute paths needed
