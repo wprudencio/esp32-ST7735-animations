@@ -3,7 +3,6 @@
 #include <SPI.h>
 #include <Adafruit_NeoPixel.h>
 
-// TFT pins (Hardware SPI — MOSI=7, SCLK=6 are ESP32-C3 default HSPI)
 #define TFT_CS    5
 #define TFT_RST   4
 #define TFT_DC    3
@@ -19,12 +18,14 @@ Adafruit_NeoPixel pixels(NUMPIXELS, LED_PIN, NEO_GRB + NEO_KHZ800);
 #define WIDTH  160
 #define HEIGHT 128
 #define NUM_BARS 16
+#define BAR_W (WIDTH / NUM_BARS - 1)
 
 float heights[NUM_BARS];
 float targets[NUM_BARS];
 float phases[NUM_BARS];
-int barsY[NUM_BARS], barsH[NUM_BARS];
+int prevTop[NUM_BARS];     // previous Y of bar top (lower = taller)
 uint16_t barColors[NUM_BARS];
+bool firstFrame = true;
 
 void setup() {
   pixels.begin();
@@ -41,16 +42,23 @@ void setup() {
     heights[i] = 0;
     targets[i] = 0;
     phases[i] = random(100) * 0.1;
-    barsH[i] = 0;
-    barsY[i] = HEIGHT;
+    prevTop[i] = HEIGHT;
+
+    float pos = i / (float)NUM_BARS;
+    uint8_t r = (uint8_t)((1.0 - pos) * 255);
+    uint8_t g = (uint8_t)(pos < 0.5 ? pos * 2 * 200 : (1.0 - (pos - 0.5) * 2) * 200);
+    uint8_t b = (uint8_t)(pos * 255);
+    barColors[i] = tft.color565(r, g, b);
   }
 }
 
 void loop() {
   unsigned long t = millis();
 
-  // --- Compute all bars first (no drawing) ---
   for (int i = 0; i < NUM_BARS; i++) {
+    int bx = i * (WIDTH / NUM_BARS);
+
+    // --- Compute new height ---
     float freq = 0.5 + i * 0.3;
     float amp = 0.3 + sin(t * 0.002 + phases[i]) * 0.3;
     float wave = sin(t * 0.005 * freq + phases[i]) * 0.4
@@ -68,34 +76,34 @@ void loop() {
       heights[i] += (targets[i] - heights[i]) * 0.08;
     }
 
-    int bottom = HEIGHT;
-    barsH[i] = heights[i] * (bottom - 10);
-    barsY[i] = bottom - barsH[i];
+    int newH = heights[i] * (HEIGHT - 10);
+    int newTop = HEIGHT - newH;
 
-    float pos = i / (float)NUM_BARS;
-    uint8_t r = (uint8_t)((1.0 - pos) * 255);
-    uint8_t g = (uint8_t)(pos < 0.5 ? pos * 2 * 200 : (1.0 - (pos - 0.5) * 2) * 200);
-    uint8_t b = (uint8_t)(pos * 255);
-    barColors[i] = tft.color565(r, g, b);
-  }
-
-  // --- Pass 1: draw all black backgrounds (full column width) ---
-  for (int i = 0; i < NUM_BARS; i++) {
-    int barX = i * (WIDTH / NUM_BARS);
-    int barW = (WIDTH / NUM_BARS) - 1;
-    tft.fillRect(barX, 0, barW, HEIGHT - 10, ST7735_BLACK);
-  }
-
-  // --- Pass 2: draw all colored bars on top ---
-  for (int i = 0; i < NUM_BARS; i++) {
-    if (barsH[i] > 0) {
-      int barX = i * (WIDTH / NUM_BARS);
-      int barW = (WIDTH / NUM_BARS) - 1;
-      tft.fillRect(barX, barsY[i], barW, barsH[i], barColors[i]);
+    // --- Only redraw the pixels that changed ---
+    if (firstFrame) {
+      // First frame: draw full bar
+      tft.fillRect(bx, 0, BAR_W, HEIGHT - 10, ST7735_BLACK);
+      if (newH > 0) {
+        tft.fillRect(bx, newTop, BAR_W, newH, barColors[i]);
+      }
+    } else {
+      // Only update the delta at the top of the bar
+      if (newTop < prevTop[i]) {
+        // Bar grew taller — draw colored extension at top
+        tft.fillRect(bx, newTop, BAR_W, prevTop[i] - newTop, barColors[i]);
+      } else if (newTop > prevTop[i]) {
+        // Bar shrank — erase exposed area at top
+        tft.fillRect(bx, prevTop[i], BAR_W, newTop - prevTop[i], ST7735_BLACK);
+      }
+      // Same height = nothing to do
     }
+
+    prevTop[i] = newTop;
   }
 
-  // WS2812 pulses to the beat
+  firstFrame = false;
+
+  // WS2812 pulses to beat
   float beat = (sin(t * 0.008) + 1) * 0.5;
   pixels.setPixelColor(0, pixels.Color(
     (uint8_t)(beat * 255),

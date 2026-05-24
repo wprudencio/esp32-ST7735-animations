@@ -79,6 +79,7 @@ arduino-cli board list
 | `touch_led/` | TTP223 touch sensor on **GPIO 0** → WS2812 blue on touch |
 | `hello_tft/` | ST7735 TFT (1.8") + TTP223 touch → WS2812 — "Hello World" on screen, touch state displayed, WS2812 glows blue on touch |
 | `tft_animation/` | 6 animation modes (rainbow bars, bounce, starfield, plasma, spinner, fill flash) with FPS counter. Tap touch to cycle modes |
+| `spectrum/` | Music spectrum visualizer — 16 bars with simulated audio, fast-attack/slow-decay, WS2812 pulse |
 
 ### Touch LED Logic
 
@@ -104,6 +105,49 @@ arduino-cli board list
 - Reads touch from GPIO 0 and displays "TOUCHED" (green) or "released" (red)
 - Lights the WS2812 blue when touched, off when released
 - Display only updates on state change (no flicker)
+
+## Animation Strategy — Smooth & Fast on ST7735
+
+The key insight for tear-free animation on slow-SPI displays like the ST7735:
+
+### ❌ Don't full-clear every frame
+```cpp
+// BAD — visible tearing/flash
+tft.fillScreen(ST7735_BLACK);  // clears everything
+for (...) { tft.fillRect(...); }  // redraws everything
+```
+You see the brief black flash before the new frame appears.
+
+### ❌ Don't two-pass (black then color)
+```cpp
+// BAD — double the visual passes
+for (...) { tft.fillRect(bx, 0, bw, HEIGHT, BLACK); }  // all black
+for (...) { tft.fillRect(bx, top, bw, h, COLOR); }     // all color
+```
+You see black columns flash before colors appear.
+
+### ✅ Only redraw the pixels that changed
+```cpp
+// GOOD — only the moving edge, nothing else
+if (newTop < prevTop) {
+  // Bar grew → draw colored sliver at new top
+  tft.fillRect(bx, newTop, bw, prevTop - newTop, barColor);
+} else if (newTop > prevTop) {
+  // Bar shrank → erase exposed area at top
+  tft.fillRect(bx, prevTop, bw, newTop - prevTop, BLACK);
+}
+// Same height = zero SPI writes
+```
+
+The essence: **track the previous state of every element, and only write the pixels that differ.** For a spectrum analyzer, only the bar tops move — the bottom 90% of each bar stays identical frame to frame, so don't touch it.
+
+### General Rules for Smooth Display Animation
+
+1. **Never full-clear** — always track previous positions
+2. **Write only the changed pixels** — the smaller the rect, the faster
+3. **Compute before draw** — calculate all positions/colors first, then batch the SPI writes if possible
+4. **Same height = skip** — if an element didn't change, don't write a single byte
+5. **Minimize delay()** — use short delays (16-30ms) for ~30-60fps
 
 ## Important Notes
 
