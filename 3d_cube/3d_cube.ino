@@ -21,7 +21,7 @@ Adafruit_NeoPixel pixels(NUMPIXELS, LED_PIN, NEO_GRB + NEO_KHZ800);
 #define HEIGHT 128
 #define CX (WIDTH/2)
 #define CY (HEIGHT/2)
-#define NB 3
+#define NB 15
 #define CUBE_BOUND 0.85
 
 typedef struct { float x,y,z; } Vec3;
@@ -96,7 +96,7 @@ int ee[12][2] = {{0,1},{1,2},{2,3},{3,0},{4,5},{5,6},{6,7},{7,4},{0,4},{1,5},{2,
 
 // ─── Balls ─────────────────────────
 Vec3 pos[NB], vel[NB];
-float rad[NB] = {0.18, 0.16, 0.17};
+float rad[NB];
 uint16_t cols[NB];
 float hue[NB];
 
@@ -149,13 +149,14 @@ void setup() {
   tft.fillScreen(ST7735_BLACK);
 
   for (int i=0; i<NB; i++) {
-    pos[i].x = random(2000)*0.0005 - 0.5;
-    pos[i].y = random(2000)*0.0005 - 0.5;
-    pos[i].z = random(2000)*0.0005 - 0.5;
-    vel[i].x = random(300)*0.0001 - 0.015;
-    vel[i].y = random(300)*0.0001 - 0.015;
-    vel[i].z = random(300)*0.0001 - 0.015;
-    hue[i] = i * 120.0;
+    rad[i] = 0.06 + random(60) * 0.0008;  // 0.06 .. 0.11
+    pos[i].x = random(2000)*0.0008 - 0.8;
+    pos[i].y = random(2000)*0.0008 - 0.8;
+    pos[i].z = random(2000)*0.0008 - 0.8;
+    vel[i].x = random(400)*0.0001 - 0.02;
+    vel[i].y = random(400)*0.0001 - 0.02;
+    vel[i].z = random(400)*0.0001 - 0.02;
+    hue[i] = i * (360.0/NB);
     cols[i] = hsv(hue[i], 0.9, 0.85);
   }
 }
@@ -257,23 +258,24 @@ void loop() {
     fbDrawLine(sx[a]-1,sy[a],sx[b]-1,sy[b],ed);
   }
 
-  // Sort balls back-to-front
-  int order[3]={0,1,2};
-  if (pd[order[0]]<pd[order[1]]) {int t=order[0];order[0]=order[1];order[1]=t;}
-  if (pd[order[0]]<pd[order[2]]) {int t=order[0];order[0]=order[2];order[2]=t;}
-  if (pd[order[1]]<pd[order[2]]) {int t=order[1];order[1]=order[2];order[2]=t;}
+  // Sort balls back-to-front (bubble sort)
+  int order[NB];
+  for (int i=0;i<NB;i++) order[i]=i;
+  for (int i=0;i<NB-1;i++)
+    for (int j=0;j<NB-1-i;j++)
+      if (pd[order[j]]<pd[order[j+1]]) {int t=order[j];order[j]=order[j+1];order[j+1]=t;}
 
   for (int si=0;si<NB;si++) {
     int i=order[si];
     if (pd[i]<=0.4||pd[i]>=5.5) continue;
-    int vr=2+(int)(rad[i]*15.0/pd[i]);
-    if (vr<2) vr=2; if (vr>7) vr=7;
-    uint8_t br=(uint8_t)((1.0-(pd[i]-0.5)/5.0)*220+35);
+    int vr=1+(int)(rad[i]*14.0/pd[i]);
+    if (vr<1) vr=1; if (vr>5) vr=5;
+    uint8_t br=(uint8_t)((1.0-(pd[i]-0.5)/5.0)*200+55);
 
     fbDrawCircle(px[i],py[i],vr+1,tft.color565(20,20,50));
     fbFillCircle(px[i],py[i],vr,((cols[i]>>1)&0x7BEF));
     fbFillCircle(px[i],py[i],vr-1,cols[i]);
-    if (vr>=4) fbFillCircle(px[i]-1,py[i]-1,vr-3,tft.color565(255,255,255));
+    if (vr>=3) fbFillCircle(px[i]-1,py[i]-1,vr-2,tft.color565(255,255,255));
   }
 
   // Direction indicator

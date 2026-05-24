@@ -1,6 +1,6 @@
 ---
 name: esp32-c3-ws2812
-description: Flash and develop for the ESP32-C3 board with a WS2812 (NeoPixel) LED on GPIO 10 using Arduino CLI. Use when working with the esp32 project folder, ESP32-C3, WS2812 LEDs, or the blue blink sketch.
+description: Flash and develop for the ESP32-C3 board with a WS2812 (NeoPixel) LED on GPIO 10 and ST7735 TFT display using Arduino CLI. Use when working with the esp32 project folder, ESP32-C3, WS2812 LEDs, or ST7735 TFT sketches.
 ---
 
 # ESP32-C3 + WS2812 on GPIO 10
@@ -15,22 +15,12 @@ description: Flash and develop for the ESP32-C3 board with a WS2812 (NeoPixel) L
 | **LED** | WS2812 (NeoPixel) on **GPIO 10** |
 | **Tools** | Arduino CLI (`arduino-cli` must be in PATH or at project root) |
 
-## Quick Start — Blue Blink
+## Quick Start — Create, Compile & Flash a New Sketch
 
 ```bash
 cd <project-root>
-export PATH="$PWD/bin:$PATH"  # if arduino-cli is in bin/
+export PATH="$PWD/bin:$PATH"
 
-# Compile
-arduino-cli compile --fqbn esp32:esp32:esp32c3 ws2812_blue_blink
-
-# Flash (replace port with your device)
-arduino-cli upload -p /dev/cu.usbmodemXXXXX --fqbn esp32:esp32:esp32c3 ws2812_blue_blink
-```
-
-## Creating a New Sketch
-
-```bash
 mkdir -p my_sketch
 cat > my_sketch/my_sketch.ino << 'EOF'
 #include <Adafruit_NeoPixel.h>
@@ -55,7 +45,10 @@ void loop() {
 }
 EOF
 
+# Compile
 arduino-cli compile --fqbn esp32:esp32:esp32c3 my_sketch
+
+# Flash (replace port with your device)
 arduino-cli upload -p /dev/cu.usbmodemXXXXX --fqbn esp32:esp32:esp32c3 my_sketch
 ```
 
@@ -71,22 +64,7 @@ arduino-cli monitor -p /dev/cu.usbmodemXXXXX -c baudrate=115200
 arduino-cli board list
 ```
 
-## Existing Sketches
 
-| Sketch | Description |
-|---|---|
-| `ws2812_blue_blink/` | Simple blue blink every 1s — hello world test |
-| `touch_led/` | TTP223 touch sensor on **GPIO 0** → WS2812 blue on touch |
-| `hello_tft/` | ST7735 TFT + TTP223 touch → WS2812 — "Hello World" on screen, touch state displayed, WS2812 glows blue on touch |
-| `tft_animation/` | 6 animation modes (rainbow bars, bounce, starfield, plasma, spinner, fill flash) with FPS counter. Tap touch to cycle modes |
-| `spectrum/` | Music spectrum visualizer — 16 bars, simulated audio, fast-attack/slow-decay, WS2812 pulse to beat |
-| `spectrum_psy/` | Psychedelic mirrored spectrum — 24 bars (12L+12R) radiating from center, rainbow cycling, center flare, rainbow WS2812 |
-| `3d_cube/` | 3D wireframe cube + 3 colorful bouncing balls — rainbow edges, HSV-cycling balls with specular highlights, framebuffer rendering, touch to reverse spin |
-| `dvd_bounce/` | DVD screensaver — bitmap-traced logo from SVG, bounces diagonally, 9 colors, touch changes direction |
-| `space_game/` | 3D space dodge game — parallax starfield, asteroid shooting, lives/score, touch to thrust, game over + restart |
-| `3d_spectrum/` | 3D box-art spectrum visualizer — extruded bars with front/top/side faces, 5 color palettes, touch to cycle palettes |
-
----
 
 # Display Animation Guide — ST7735 on ESP32-C3
 

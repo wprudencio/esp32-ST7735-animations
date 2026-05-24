@@ -28,16 +28,8 @@ arduino-cli upload -p /dev/cu.usbmodemXXXXX --fqbn esp32:esp32:esp32c3 <sketch>
 
 | Sketch | Disp | Touch | LED | What it does |
 |--------|------|-------|-----|-------------|
-| `ws2812_blue_blink` | — | — | ✅ | blink test |
-| `touch_led` | — | ✅ | ✅ | touch → blue |
-| `hello_tft` | ✅ | ✅ | ✅ | "Hello World" + touch status |
-| `tft_animation` | ✅ | ✅ | ✅ | 6 modes, tap to cycle |
-| `spectrum` | ✅ | — | ✅ | 16-bar music viz |
-| `spectrum_psy` | ✅ | — | ✅ | mirrored 24-bar psychedelic |
 | `3d_cube` | ✅ | ✅ | ✅ | wireframe cube + liquid particles |
-| `dvd_bounce` | ✅ | — | ✅ | DVD logo screensaver |
-| `space_game` | ✅ | ✅ | ✅ | 3D space dodge game |
-| `3d_spectrum` | ✅ | ✅ | ✅ | 3D box-art spectrum, 5 palettes |
+| `spectrum` | ✅ | — | ✅ | 16-bar music viz |
 
 ## Flashing
 
