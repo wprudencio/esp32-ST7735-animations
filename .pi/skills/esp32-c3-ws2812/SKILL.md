@@ -81,7 +81,7 @@ arduino-cli board list
 | `tft_animation/` | 6 animation modes (rainbow bars, bounce, starfield, plasma, spinner, fill flash) with FPS counter. Tap touch to cycle modes |
 | `spectrum/` | Music spectrum visualizer — 16 bars, simulated audio, fast-attack/slow-decay, WS2812 pulse to beat |
 | `spectrum_psy/` | Psychedelic mirrored spectrum — 24 bars (12L+12R) radiating from center, rainbow cycling, center flare, rainbow WS2812 |
-| `3d_cube/` | 3D wireframe cube with liquid particles — rainbow edges, local-space physics, pre-computed rotation matrix, touch to reverse spin |
+| `3d_cube/` | 3D wireframe cube + 3 colorful bouncing balls — rainbow edges, HSV-cycling balls with specular highlights, framebuffer rendering, touch to reverse spin |
 | `dvd_bounce/` | DVD screensaver — bitmap-traced logo from SVG, bounces diagonally, 9 colors, touch changes direction |
 | `space_game/` | 3D space dodge game — parallax starfield, asteroid shooting, lives/score, touch to thrust, game over + restart |
 | `3d_spectrum/` | 3D box-art spectrum visualizer — extruded bars with front/top/side faces, 5 color palettes, touch to cycle palettes |
@@ -133,17 +133,16 @@ Each `fillRect()` sends:
 
 ## 3. Animation Strategy — The Incremental Method
 
-### ❌ Don't full-clear every frame
-```cpp
-tft.fillScreen(ST7735_BLACK);   // visible flash
-for (...) { tft.fillRect(...); } // sequential draw
+### ⚠️ Incremental = flicker on complex scenes
+
+The incremental method (erase old, draw new) works for simple bar charts or few elements. But with many moving elements, each `fillCircle`/`drawLine` goes through a **separate SPI transaction** with command overhead. The display updates pixel-by-pixel as data arrives, so the user sees:
+
+```
+[erase element 1] → [black patch visible] → [erase element 2] → ...
+→ [draw element 1] → [element appears] → [draw element 2] → ...
 ```
 
-### ❌ Don't two-pass (black then color)
-```cpp
-for (...) { tft.fillRect(bx, 0, bw, HEIGHT, BLACK); }  // all black flash
-for (...) { tft.fillRect(bx, top, bw, h, COLOR); }     // then color
-```
+This sub-frame visibility creates **flicker/blinking** that can't be eliminated by rearranging erase/draw order.
 
 ### ✅ Only redraw the pixels that changed
 ```cpp
@@ -172,7 +171,189 @@ void loop() {
 }
 ```
 
-## 4. Performance Optimization
+## 4. The Framebuffer Method — Zero-Flicker Rendering (Recommended for 3D/Complex Scenes)
+
+### Why framebuffer?
+
+The ST7735 has **no double-buffer** — every SPI write updates the screen immediately. For smooth 3D animation, the only way to avoid visible sub-frame updates is to:
+
+1. **Draw the entire frame in RAM** (a 40KB framebuffer)
+2. **Blast the complete frame to the display in ONE SPI transaction**
+
+This eliminates ALL flicker. The screen transitions atomically from old frame to new frame.
+
+### Memory Budget
+
+```cpp
+// 160×128 pixels × 2 bytes (RGB565) = 40,960 bytes ≈ 40KB
+uint16_t fb[WIDTH * HEIGHT];  // static allocation — no malloc!
+```
+
+ESP32-C3 has 320KB total RAM. 40KB framebuffer + ~15KB globals = 55KB used, ~265KB free. **Easily fits.** Always use `static uint16_t fb[...]` (global scope) to avoid stack/heap fragmentation.
+
+### Pixel Set Macro (with bounds check)
+
+```cpp
+#define FPIX(x,y,c) if((x)>=0&&(x)<WIDTH&&(y)>=0&&(y)<HEIGHT) fb[(y)*WIDTH+(x)]=(c)
+```
+
+### Drawing Functions (all in-memory, no SPI)
+
+**Clear framebuffer:**
+```cpp
+void fbClear() {
+  for (int i=0; i<WIDTH*HEIGHT; i++) fb[i] = ST7735_BLACK;
+}
+```
+
+**Horizontal line (optimized for fillCircle):**
+```cpp
+void fbHLine(int x, int y, int w, uint16_t c) {
+  if (y<0||y>=HEIGHT) return;
+  if (x<0) { w+=x; x=0; }
+  if (x+w>WIDTH) w=WIDTH-x;
+  if (w<=0) return;
+  uint16_t* p = &fb[y*WIDTH+x];
+  while (w--) *p++ = c;        // pointer fill = fast
+}
+```
+
+**Filled circle (midpoint algorithm, uses fbHLine for each scanline):**
+```cpp
+void fbFillCircle(int cx, int cy, int r, uint16_t c) {
+  int x=0, y=r, d=3-2*r;
+  while (x<=y) {
+    fbHLine(cx-x, cy-y, 2*x+1, c);  // top segment
+    fbHLine(cx-x, cy+y, 2*x+1, c);  // bottom segment
+    fbHLine(cx-y, cy-x, 2*y+1, c);  // left segment
+    fbHLine(cx-y, cy+x, 2*y+1, c);  // right segment
+    if (d<0) d+=4*x+6;
+    else { d+=4*(x-y)+10; y--; }
+    x++;
+  }
+}
+```
+
+**Circle outline (Bresenham, 8-way symmetry):**
+```cpp
+void fbDrawCircle(int cx, int cy, int r, uint16_t c) {
+  int x=0, y=r, d=3-2*r;
+  while (x<=y) {
+    FPIX(cx+x,cy+y,c); FPIX(cx-x,cy+y,c);
+    FPIX(cx+x,cy-y,c); FPIX(cx-x,cy-y,c);
+    FPIX(cx+y,cy+x,c); FPIX(cx-y,cy+x,c);
+    FPIX(cx+y,cy-x,c); FPIX(cx-y,cy-x,c);
+    if (d<0) d+=4*x+6;
+    else { d+=4*(x-y)+10; y--; }
+    x++;
+  }
+}
+```
+
+**Line (Bresenham):**
+```cpp
+void fbDrawLine(int x0, int y0, int x1, int y1, uint16_t c) {
+  int dx=abs(x1-x0), sx=x0<x1?1:-1;
+  int dy=-abs(y1-y0), sy=y0<y1?1:-1;
+  int err=dx+dy, e2;
+  for (;;) {
+    FPIX(x0,y0,c);
+    if (x0==x1 && y0==y1) break;
+    e2=2*err;
+    if (e2>=dy) { err+=dy; x0+=sx; }
+    if (e2<=dx) { err+=dx; y0+=sy; }
+  }
+}
+```
+
+### Flush to Display (the magic)
+
+```cpp
+void fbFlush() {
+  tft.startWrite();
+  tft.setAddrWindow(0, 0, WIDTH, HEIGHT);   // one address window
+  tft.writePixels(fb, WIDTH*HEIGHT);         // one 40KB SPI burst
+  tft.endWrite();
+}
+```
+
+If `writePixels` is not available, use `tft.drawRGBBitmap(0, 0, fb, WIDTH, HEIGHT)` instead.
+
+### Complete Render Loop Pattern
+
+```cpp
+void loop() {
+  // 1. Physics / logic (fast, in-memory)
+  updatePhysics();
+  
+  // 2. Clear framebuffer
+  fbClear();
+  
+  // 3. Draw everything to framebuffer (all in-memory, zero SPI)
+  drawScene();  // fbDrawLine(), fbFillCircle(), fpDrawCircle(), etc.
+  
+  // 4. One atomic SPI burst to display
+  fbFlush();
+  
+  delay(8);  // ~100 FPS target (8ms render + 8ms delay = 16ms)
+}
+```
+
+### When to Use Framebuffer vs Incremental
+
+| Scenario | Method | Why |
+|---|---|---|
+| Bar charts, simple meters | Incremental | Few elements, minimal erase cost |
+| 3D wireframes, rotating objects | **Framebuffer** | Many moving lines, sub-frame flicker unavoidable otherwise |
+| Particle systems (>5 elements) | **Framebuffer** | Erase-then-draw gap too large |
+| Static text + occasional updates | Incremental | No continuous movement |
+| Games, animations, smooth motion | **Framebuffer** | Zero-flicker requirement |
+
+### Performance: Framebuffer vs Direct SPI
+
+| Operation | Direct SPI (each op) | Framebuffer (in RAM) |
+|---|---|---|
+| `fillCircle(r=6)` | ~1ms (SPI command + data) | ~10μs (pointer writes) |
+| `drawLine(40px)` | ~0.2ms | ~5μs |
+| Full frame erase | ~11ms (fillScreen = 40KB SPI) | ~1ms (memset 40KB in SRAM) |
+| Frame flush | N/A | ~8ms (one 40KB SPI burst at 40MHz) |
+
+RAM drawing is **100-1000x faster** than SPI. The only SPI cost is the single flush at the end. For complex scenes with 50+ draw operations, the framebuffer approach is dramatically faster AND flicker-free.
+
+### Thick Lines in Framebuffer
+
+To draw thick edges (2-3px), draw multiple offset lines — free in framebuffer since there's no per-line SPI cost:
+
+```cpp
+// 3px-wide edge
+fbDrawLine(sx[a],   sy[a], sx[b],   sy[b], edgeColor);
+fbDrawLine(sx[a]+1, sy[a], sx[b]+1, sy[b], edgeColor);
+fbDrawLine(sx[a]-1, sy[a], sx[b]-1, sy[b], dimColor);
+```
+
+### Layered Blob Rendering (Soft Glow Effect)
+
+For 3D spheres/particles, layer multiple circles to create depth and specular highlights — cheap in framebuffer:
+
+```cpp
+// 4-layer ball: halo → body → core → specular highlight
+fbDrawCircle(px, py, vr+1, darkHalo);      // outer ring
+fbFillCircle(px, py, vr,   dimBody);        // soft body
+fbFillCircle(px, py, vr-1, brightCore);     // bright core
+fbFillCircle(px-1, py-1, vr-3, white);      // specular dot
+```
+
+### Memory Warning
+
+- **Don't put framebuffer on the stack** — `uint16_t fb[20480]` as a local variable will overflow the stack. Always declare at **global scope**.
+- Framebuffer is `static` — initialized once, reused every frame.
+- Total RAM: 40KB fb + ~15KB libs + ~5KB variables = ~60KB. ESP32-C3 has 320KB. Plenty of headroom.
+
+---
+
+## 5. 3D Rendering Patterns
+
+## 5. 3D Rendering Patterns
 
 ### Pre-compute rotation matrices
 ```cpp
@@ -193,6 +374,8 @@ void applyRot(Vec3 *p) {
   p->x = p->x*rot[0] + p->y*rot[1] + p->z*rot[2]; ...
 }
 ```
+
+## 6. Performance Optimization (General)
 
 ### drawPixel vs fillCircle
 - `drawPixel` = 1 SPI command + 2 bytes = ~5μs
@@ -215,7 +398,7 @@ applyRot(&world);
 project(world, &sx, &sy, &depth);
 ```
 
-## 5. Common Pitfalls
+## 7. Common Pitfalls
 
 | Problem | Cause | Fix |
 |---|---|---|
@@ -228,18 +411,20 @@ project(world, &sx, &sy, &depth);
 | **Port not found** | Device disconnected or reconnected | Run `arduino-cli board list` to find new port |
 | **Flash fails** | Boot mode issue | Hold BOOT button (GPIO 9) during connecting phase |
 
-## 6. Performance Checklist
+## 8. Performance Checklist
 
 - [ ] `SPI.begin()` called with correct pins
-- [ ] No `fillScreen()` or full `fillRect(0, 0, W, H)` in hot loop
-- [ ] Each element tracks its previous state
-- [ ] Only changed pixels are written each frame
-- [ ] `delay()` is ≤ 30ms (or use millis() delta)
+- [ ] **For 3D/complex scenes: use framebuffer** (not incremental SPI)
+- [ ] Framebuffer declared at **global scope** (not stack)
+- [ ] Only one `fbFlush()` call per frame (one SPI burst)
+- [ ] `delay()` is ≤ 16ms for 60 FPS, ≤ 8ms for 100+ FPS
+- [ ] For incremental (simple scenes): each element tracks its previous state
+- [ ] For incremental: only changed pixels are written each frame
+- [ ] First frame handled separately as full draw (both methods)
+- [ ] Pre-compute rotation matrices for 3D (6 trig calls vs per-vertex)
 - [ ] Colors pre-computed (not recalculated per frame if constant)
-- [ ] First frame handled separately as full draw
-- [ ] Pre-compute rotation matrices for 3D (6 trig calls vs 75)
-- [ ] Use `drawPixel` over `fillCircle` for many particles
 - [ ] Physics in local space for container-based simulations
+- [ ] Use `fbHLine` for fillCircle — not per-pixel `FPIX` in a loop
 
 ---
 

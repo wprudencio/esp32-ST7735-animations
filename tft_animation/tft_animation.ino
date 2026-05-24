@@ -3,12 +3,12 @@
 #include <SPI.h>
 #include <Adafruit_NeoPixel.h>
 
-// TFT pins (Software SPI)
-#define TFT_CS   4
-#define TFT_DC   8
-#define TFT_RST  9
-#define TFT_MOSI 7
-#define TFT_SCLK 6
+// TFT pins
+#define TFT_CS    5
+#define TFT_RST   4
+#define TFT_DC    3
+#define TFT_MOSI  2
+#define TFT_SCLK  1
 
 #define TOUCH_PIN 0
 #define LED_PIN   10
@@ -248,6 +248,7 @@ void setup() {
   pixels.clear();
   pixels.show();
 
+  SPI.begin(TFT_SCLK, -1, TFT_MOSI, TFT_CS);
   tft.initR(INITR_BLACKTAB);
   tft.setRotation(1);
   tft.fillScreen(ST7735_BLACK);

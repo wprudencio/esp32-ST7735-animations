@@ -3,7 +3,7 @@
 #include <SPI.h>
 #include <Adafruit_NeoPixel.h>
 
-// TFT pin definitions (Software SPI)
+// TFT pin definitions
 #define TFT_CS    5
 #define TFT_RST   4
 #define TFT_DC    3
@@ -21,7 +21,7 @@
 #define COLOR_TOUCH  ST7735_GREEN
 #define COLOR_RELEASED ST7735_RED
 
-Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_MOSI, TFT_SCLK, TFT_RST);
+Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_RST);
 Adafruit_NeoPixel pixels(NUMPIXELS, LED_PIN, NEO_GRB + NEO_KHZ800);
 
 bool last_touch = false;
@@ -34,6 +34,7 @@ void setup() {
   pixels.clear();
   pixels.show();
 
+  SPI.begin(TFT_SCLK, -1, TFT_MOSI, TFT_CS);
   tft.initR(INITR_BLACKTAB);
   tft.setRotation(1);
   tft.fillScreen(COLOR_BG);
