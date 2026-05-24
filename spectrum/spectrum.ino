@@ -23,6 +23,7 @@ Adafruit_NeoPixel pixels(NUMPIXELS, LED_PIN, NEO_GRB + NEO_KHZ800);
 float heights[NUM_BARS];
 float targets[NUM_BARS];
 float phases[NUM_BARS];
+int prevBarH[NUM_BARS];
 
 void setup() {
   pixels.begin();
@@ -39,19 +40,16 @@ void setup() {
     heights[i] = 0;
     targets[i] = 0;
     phases[i] = random(100) * 0.1;
+    prevBarH[i] = 0;
   }
 }
 
 void loop() {
-  // Erase bars area
-  tft.fillRect(0, 0, WIDTH, HEIGHT, ST7735_BLACK);
-
   unsigned long t = millis();
 
   for (int i = 0; i < NUM_BARS; i++) {
     float freq = 0.5 + i * 0.3;
 
-    // Simulate audio spectrum with multiple sine layers + noise
     float amp = 0.3 + sin(t * 0.002 + phases[i]) * 0.3;
     float wave = sin(t * 0.005 * freq + phases[i]) * 0.4
                + sin(t * 0.011 * freq + phases[i] * 2) * 0.3
@@ -62,24 +60,33 @@ void loop() {
     if (targets[i] < 0.05) targets[i] = 0;
     if (targets[i] > 1.0)  targets[i] = 1.0;
 
-    // Attack fast, decay slow (like real spectrum analyzers)
+    // Attack fast, decay slow
     if (targets[i] > heights[i]) {
       heights[i] += (targets[i] - heights[i]) * 0.6;
     } else {
       heights[i] += (targets[i] - heights[i]) * 0.08;
     }
 
-    int barH = heights[i] * (HEIGHT - 10);
     int barX = i * (WIDTH / NUM_BARS);
     int barW = (WIDTH / NUM_BARS) - 1;
+    int bottom = HEIGHT;
+    int barH = heights[i] * (bottom - 10);
 
-    // Color: warm (red/orange) on left → cool (blue/cyan) on right
-    float pos = i / (float)NUM_BARS;
-    uint8_t r = (uint8_t)((1.0 - pos) * 255);
-    uint8_t g = (uint8_t)(pos < 0.5 ? pos * 2 * 200 : (1.0 - (pos - 0.5) * 2) * 200);
-    uint8_t b = (uint8_t)(pos * 255);
+    // Erase only the old bar area (from top of previous bar to bottom)
+    if (prevBarH[i] > 0) {
+      tft.fillRect(barX, bottom - prevBarH[i], barW, prevBarH[i], ST7735_BLACK);
+    }
 
-    tft.fillRect(barX, HEIGHT - 10 - barH, barW, barH, tft.color565(r, g, b));
+    // Draw new bar only if visible
+    if (barH > 0) {
+      float pos = i / (float)NUM_BARS;
+      uint8_t r = (uint8_t)((1.0 - pos) * 255);
+      uint8_t g = (uint8_t)(pos < 0.5 ? pos * 2 * 200 : (1.0 - (pos - 0.5) * 2) * 200);
+      uint8_t b = (uint8_t)(pos * 255);
+      tft.fillRect(barX, bottom - barH, barW, barH, tft.color565(r, g, b));
+    }
+
+    prevBarH[i] = barH;
   }
 
   // WS2812 pulses to the beat
