@@ -81,6 +81,7 @@ arduino-cli board list
 | `tft_animation/` | 6 animation modes (rainbow bars, bounce, starfield, plasma, spinner, fill flash) with FPS counter. Tap touch to cycle modes |
 | `spectrum/` | Music spectrum visualizer — 16 bars, simulated audio, fast-attack/slow-decay, WS2812 pulse to beat |
 | `spectrum_psy/` | Psychedelic mirrored spectrum — 24 bars (12L+12R) radiating from center, rainbow cycling, center flare, rainbow WS2812 |
+| `3d_cube/` | 3D wireframe cube rotating in perspective — full rotation around X/Y/Z axes, depth-sorted edges, vertex glow dots, incremental rendering |
 
 ---
 
