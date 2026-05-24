@@ -83,6 +83,7 @@ arduino-cli board list
 | `spectrum_psy/` | Psychedelic mirrored spectrum — 24 bars (12L+12R) radiating from center, rainbow cycling, center flare, rainbow WS2812 |
 | `3d_cube/` | 3D wireframe cube rotating in perspective — full rotation around X/Y/Z axes, depth-sorted edges, vertex glow dots, incremental rendering |
 | `space_game/` | 3D space dodge game — parallax starfield, asteroid shooting, lives/score, touch to thrust, game over + restart |
+| `3d_spectrum/` | 3D box-art spectrum visualizer — extruded bars with front/top/side faces, 5 color palettes, touch to cycle palettes |
 
 ---
 
