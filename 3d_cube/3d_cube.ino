@@ -140,6 +140,7 @@ int ee[12][2] = {{0,1},{1,2},{2,3},{3,0},{4,5},{5,6},{6,7},{7,4},{0,4},{1,5},{2,
 // ─── Balls ─────────────────────────
 Vec3 pos[MAX_BALLS], vel[MAX_BALLS];
 float rad[MAX_BALLS];
+float bounce[MAX_BALLS];
 uint16_t cols[MAX_BALLS];
 float hue[MAX_BALLS];
 
@@ -154,6 +155,8 @@ float ax=0, ay=0, az=0;
 int dir = 1;
 bool lt = false;
 float rot[9];
+float camDist = 3.0;   // camera distance (zoom)
+float focalLen = 96.0;  // focal length (perspective)
 
 void compRot(float a, float b, float c) {
   float cx=cosf(a),sx=sinf(a),cy=cosf(b),sy=sinf(b),cz=cosf(c),sz=sinf(c);
@@ -168,10 +171,10 @@ void aRot(Vec3* p) {
   p->x=x; p->y=y; p->z=z;
 }
 void proj(Vec3 p, int* sx, int* sy, float* d) {
-  float z = p.z + 3.0;
+  float z = p.z + camDist;
   *d = z;
-  *sx = CX + (int)(p.x * 96.0 / z);
-  *sy = CY + (int)(p.y * 96.0 / z);
+  *sx = CX + (int)(p.x * focalLen / z);
+  *sy = CY + (int)(p.y * focalLen / z);
 }
 
 uint16_t hsv(float h, float s, float v) {
@@ -190,14 +193,28 @@ uint16_t hsv(float h, float s, float v) {
 }
 
 void addBall(int i) {
-  rad[i] = 0.12 + random(80) * 0.0015;    // 0.12 .. 0.24 — bigger balls
+  // Hue determines physical archetype via a weight factor
+  // Red (0°):    heavy, slow, big, low bounce   → weight ~1.8
+  // Green (120°): medium                         → weight ~1.0
+  // Blue (240°):  light, fast, small, high bounce → weight ~0.4
+  float h = i * (360.0 / MAX_BALLS);
+  float radH = h * (PI / 180.0);
+  float weight = 1.1 + cosf(radH) * 0.7;              // 0.4 .. 1.8
+
+  rad[i]    = 0.07 + weight * 0.07;                   // 0.098 .. 0.196
+  bounce[i] = 0.88 - weight * 0.22;                   // 0.48 .. 0.79 — heavy balls thud, light balls bounce
+
   pos[i].x = random(2000)*0.0008 - 0.8;
   pos[i].y = random(2000)*0.0008 - 0.8;
   pos[i].z = random(2000)*0.0008 - 0.8;
-  vel[i].x = random(400)*0.0001 - 0.02;
-  vel[i].y = random(400)*0.0001 - 0.02;
-  vel[i].z = random(400)*0.0001 - 0.02;
-  hue[i] = i * (360.0 / MAX_BALLS);
+
+  // Light balls get a speed boost, heavy balls are sluggish
+  float speedMul = 1.6 - weight * 0.6;                // 0.52 .. 1.36
+  vel[i].x = (random(400)*0.0001 - 0.02) * speedMul;
+  vel[i].y = (random(400)*0.0001 - 0.02) * speedMul;
+  vel[i].z = (random(400)*0.0001 - 0.02) * speedMul;
+
+  hue[i] = h;
   cols[i] = hsv(hue[i], 0.9, 0.85);
 }
 
@@ -256,12 +273,12 @@ void loop() {
   for (int i=0; i<nb; i++) {
     pos[i].x+=vel[i].x; pos[i].y+=vel[i].y; pos[i].z+=vel[i].z;
     float b=CUBE_BOUND-rad[i];
-    if (pos[i].x>b)      {pos[i].x=b;      vel[i].x=-fabsf(vel[i].x)*0.55;}
-    else if (pos[i].x<-b) {pos[i].x=-b;     vel[i].x= fabsf(vel[i].x)*0.55;}
-    if (pos[i].y>b)      {pos[i].y=b;      vel[i].y=-fabsf(vel[i].y)*0.55;}
-    else if (pos[i].y<-b) {pos[i].y=-b;     vel[i].y= fabsf(vel[i].y)*0.55;}
-    if (pos[i].z>b)      {pos[i].z=b;      vel[i].z=-fabsf(vel[i].z)*0.55;}
-    else if (pos[i].z<-b) {pos[i].z=-b;     vel[i].z= fabsf(vel[i].z)*0.55;}
+    if (pos[i].x>b)      {pos[i].x=b;      vel[i].x=-fabsf(vel[i].x)*bounce[i];}
+    else if (pos[i].x<-b) {pos[i].x=-b;     vel[i].x= fabsf(vel[i].x)*bounce[i];}
+    if (pos[i].y>b)      {pos[i].y=b;      vel[i].y=-fabsf(vel[i].y)*bounce[i];}
+    else if (pos[i].y<-b) {pos[i].y=-b;     vel[i].y= fabsf(vel[i].y)*bounce[i];}
+    if (pos[i].z>b)      {pos[i].z=b;      vel[i].z=-fabsf(vel[i].z)*bounce[i];}
+    else if (pos[i].z<-b) {pos[i].z=-b;     vel[i].z= fabsf(vel[i].z)*bounce[i];}
   }
 
   // Color cycling
@@ -271,9 +288,14 @@ void loop() {
     cols[i] = hsv(hue[i], 0.9, 0.85);
   }
 
-  // Rotation
-  float da=0.028*dir;
-  ax+=da; ay+=da*1.4; az+=da*0.5;
+  // Dynamic camera — orbits with breathing zoom, wobble, varying speed
+  float tSec = t * 0.001;
+  camDist = 2.6 + 0.8 * sinf(tSec * 0.13);
+  focalLen = 85.0 + 25.0 * sinf(tSec * 0.17 + 1.0);
+  float speed = 0.020 + 0.018 * sinf(tSec * 0.09);
+  ax += speed * dir * (1.0 + 0.7 * sinf(tSec * 0.19));
+  ay += speed * dir * (1.0 + 0.6 * cosf(tSec * 0.23));
+  az += speed * dir * (0.6 + 0.5 * sinf(tSec * 0.11));
   compRot(ax,ay,az);
 
   // Project
