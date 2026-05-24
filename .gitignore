@@ -1,0 +1,6 @@
+.DS_Store
+esp-idf/
+bin/
+build/
+sdkconfig
+sdkconfig.old
