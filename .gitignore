@@ -1,6 +1,23 @@
+# macOS
 .DS_Store
-esp-idf/
-bin/
+
+# Arduino / ESP32 build artifacts
 build/
+*.elf
+*.hex
+*.o
+*.bin
+
+# ESP-IDF (framework, not part of sketch)
+esp-idf/
 sdkconfig
 sdkconfig.old
+
+# Arduino CLI tools
+bin/
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*~
