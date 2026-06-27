@@ -1,6 +1,8 @@
 # ESP32-C3 Projects
 
-<video src="assets/shorts.mp4" controls muted loop width="360"></video>
+
+https://github.com/user-attachments/assets/bfb8bbe7-ee6e-4292-86b1-a62717d555e8
+
 
 ESP32-C3 RISC-V board with ST7735 160×128 TFT display (SPI), WS2812 NeoPixel LED (GPIO 10), and button (GPIO 0 / BOOT).
 
