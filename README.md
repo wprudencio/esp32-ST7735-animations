@@ -35,6 +35,17 @@ arduino-cli board list
 arduino-cli monitor -p /dev/cu.usbmodemXXXXX -c baudrate=115200
 ```
 
+## Development Skill
+
+This repo includes an [Agent Skills](https://agentskills.io)-compatible skill at [`.agents/skills/esp32-c3-ws2812/`](.agents/skills/esp32-c3-ws2812/) that teaches AI coding agents how to work with this hardware:
+
+- ESP32-C3 pinout, flashing workflow, and common pitfalls
+- WS2812 NeoPixel setup on GPIO 10
+- ST7735 TFT display — SPI init, incremental vs framebuffer rendering, 3D patterns
+- Performance optimization and troubleshooting
+
+The skill is auto-discovered by pi when working in this project, and is also symlinked to `~/.agents/skills/` for use by other Agent Skills–compatible agents (Claude Code, Codex, etc.) from any directory.
+
 ## Sketches
 
 | Sketch | Display | Touch | LED | Description |
