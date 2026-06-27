@@ -50,19 +50,8 @@ The skill is auto-discovered by pi when working in this project, and is also sym
 
 | Sketch | Display | Touch | LED | Description |
 |--------|---------|-------|-----|-------------|
-| [`flappy_bird`](flappy_bird/) | ✅ | ✅ | ✅ | Flappy Bird clone, Game Boy DMG green palette, minimalist pixel art |
 | [`3d_cube`](3d_cube/) | ✅ | ✅ | ✅ | Wireframe cube + up to 500 liquid particles with collision physics |
 | [`spectrum`](spectrum/) | ✅ | — | ✅ | 16-bar audio spectrum visualizer, breathing color gradient |
-
-### Flappy Bird
-
-Classic side-scrolling obstacle game in Game Boy green (4-shade DMG palette).
-
-- **Press BOOT** to flap / start / retry
-- Green LED flash on flap, red pulse on death, idle glow in menu
-- Difficulty ramps as pipes spawn faster
-- High score tracked during session
-- Clean minimalist design: flat sky, solid ground, crisp pixel pipes
 
 ### 3D Cube
 
