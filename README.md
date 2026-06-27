@@ -1,4 +1,4 @@
-# ESP32-C3 Projects
+# esp32-ST7735-animations
 
 
 https://github.com/user-attachments/assets/bfb8bbe7-ee6e-4292-86b1-a62717d555e8
